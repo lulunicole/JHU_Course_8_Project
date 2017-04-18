@@ -1,0 +1,127 @@
+---
+title: "JHU DS Course 8 Project"
+author: "Jingting Lu"
+date: "April 4, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+library(caret)
+```
+## Identifying body movement based on accelerometer measurements  
+Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. 
+
+In this project, we used data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. We trained a model to learn to identify the way participants performed the movements. The model was able to correctly identify the movement of all 20 test samples. 
+
+### Step 1 Download and import data
+```{r}
+url1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+dest1 <- "C:\\Users\\jingting.lu\\Desktop\\JHU_Data science\\8_Practical machine learning\\pml-training.csv"
+dest2 <- "C:\\Users\\jingting.lu\\Desktop\\JHU_Data science\\8_Practical machine learning\\pml-testing.csv"
+
+if(!file.exists(dest1)){download.file(url1, dest1)}
+if(!file.exists(dest2)){download.file(url2, dest2)}
+
+train<-read.csv(dest1, header = T, na.strings=c('#DIV/0!', '', 'NA'))
+test<-read.csv(dest2, header = T, na.strings=c('#DIV/0!', '', 'NA'))
+```
+
+
+We got a bunch of <NA>s, but no worries as they will test as NAs. 
+
+But we do worry about NAs 
+```{r}
+dim(train)
+sum(is.na(train))
+sum(complete.cases(train))
+max(apply(train, 2, function(x) sum(is.na(x))))
+NAPerCol <- apply(train, 2, function(x) sum(is.na(x)))/nrow(train)
+
+train <- train[,NAPerCol < 0.95]
+train<-train[,-c(1:7)]
+test <- test[,NAPerCol < 0.95]
+test<-test[,-c(1:7)]
+ncol(train)
+```
+We see the majority of entries are incomplete, and the NAs concentrate in a few columns. Some columns are mostly incomplete and therefore we can't simply choose to ignore any entry with NA; instead we delete columns are more than 95% NA, and likely not very useful.  We will remove those columns from the training set.
+
+We also checked for zero covariates and found out that there is none.
+```{r}
+#Example
+nzv <- nearZeroVar(train, saveMetrics = T)
+sum(nzv$nzv)
+```
+
+We will test for highly correlated variables
+
+```{r}
+descrCor <-  cor(train[,-53])
+sum(abs(descrCor[upper.tri(descrCor)]) > .99)
+which(abs(descrCor[upper.tri(descrCor)]) > .99)
+```
+
+We see that there is only one pair of variables with more than 99% correlation. Let's keep it for now and visualize all the correlation between variables.
+
+## Visualize data
+Given the dimension of this dataset, direct visualization is difficult - but we can show the correlation between variables.
+```{r}
+library(corrplot)
+corrPlot <- cor(train[, -53])
+corrplot(corrPlot, method="color")
+```
+
+### Preprocess data
+We will preprocess data to center and scale  
+```{r}
+#Standardizing the dataset
+set.seed(1)
+pre_obj<-preProcess(train[,-53],method = c("center","scale"))
+train_proc <- predict(pre_obj,train[,-53])
+test_proc<-predict(pre_obj,test[,-53])
+train_proc$classe <- train[,53]
+test_proc$classe <- test[,53]
+```
+
+We then train a random forest model to classify the movement.  Random forest is one of the most accurate and widely used classification algorithms, and it works efficiently on datasets with many variables. 
+
+###Train Random forest model
+```{r}
+set.seed(1)
+require(parallel)
+require(doParallel)
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+system.time(trainingModel <- train(classe ~ ., data=train_proc, 
+                                   method="rf", 
+                                   ntree = 250, 
+                                   trControl = trainControl(
+                                       method = "cv", 
+                                       number = 10,
+                                       classProbs = T, 
+                                       savePredictions = T, 
+                                       allowParallel = T)))
+stopCluster(cl)
+```
+
+```{r}
+trainingModel
+```
+
+CM for trainingset
+```{r}
+confusionMatrix(predict(trainingModel$finalModel, train_proc[,-53]),train_proc$classe)
+```
+
+We achieved 10-fold cross-validation error of less than 1%.  Because of the cross-validation and the large training set I am fairly confident that high accuracy is not due to overfitting.  The in-sample error should be in this case similar to out-of-sample error.
+
+Predict for test set
+```{r}
+predict(trainingModel,test_proc[,-53])
+```
+They were all correct, according to the quiz.
